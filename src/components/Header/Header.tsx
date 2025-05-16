@@ -84,6 +84,13 @@ export default function Header() {
                 <Icon name="Network" />
                 <span>Dashboard</span>
               </Link>
+              <Link
+                href="/aura_eligibility"
+                className={`${styles.nav__icon} ${pathname === "/aura_eligibility" ? styles.activeLink : ""} `}
+              >
+                <Icon name="Vibe" />
+                <span>Aura</span>
+              </Link>
             </div>
           </div>
           <div className={`${styles.header__container__end__desktop}`}>

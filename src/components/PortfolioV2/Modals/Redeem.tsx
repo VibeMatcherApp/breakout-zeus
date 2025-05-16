@@ -1,7 +1,5 @@
 import { captureException } from "@sentry/nextjs";
-import {
-  getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { WalletSignTransactionError } from "@solana/wallet-adapter-base";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, TransactionInstruction } from "@solana/web3.js";
@@ -24,7 +22,10 @@ import { Position } from "@/types/zplClient";
 import { BTC_DECIMALS } from "@/utils/constant";
 import { formatValue } from "@/utils/format";
 import { notifyError, notifyTx } from "@/utils/notification";
-import { createStakeInstruction } from "@/vibe_vault/index";
+import {
+  createStakeInstruction,
+  createUnstakeInstruction,
+} from "@/vibe_vault/index";
 
 function calcInputValue(inputValue: string, decimals: number) {
   // Handle multiple decimal points
@@ -68,6 +69,7 @@ export default function RedeemModal({
   const { mutate: mutatePositions } = usePositions(solanaPubkey);
 
   const [isRedeeming, setIsRedeeming] = useState(false);
+  const [isUnstaking, setIsUnstaking] = useState(false);
   const [redeemAmount, setRedeemAmount] = useState("");
   const [errorMessage, setErrorMessage] = useState<string>("");
 
@@ -111,6 +113,84 @@ export default function RedeemModal({
     const inputValue = calcInputValue(max.toString(), BTC_DECIMALS);
     const val = Number(inputValue);
     setRedeemAmount?.(formatValue(val, BTC_DECIMALS));
+  };
+
+  const handleUnstake = async () => {
+    if (!redeemAmount || !zplClient || !solanaPubkey) return;
+    setIsUnstaking(true);
+
+    try {
+      if (!positions) return;
+
+      const sortedPositions = positions.toSorted((a, b) =>
+        b.storedAmount
+          .sub(b.frozenAmount)
+          .cmp(a.storedAmount.sub(a.frozenAmount))
+      );
+
+      const unstakeAmountBN = new BN(
+        new BigNumber(redeemAmount)
+          .multipliedBy(new BigNumber(10).pow(BTC_DECIMALS))
+          .toString()
+      );
+
+      const ixs: TransactionInstruction[] = [];
+
+      let remainingAmount = unstakeAmountBN.clone();
+      for (const position of sortedPositions) {
+        const amountToRedeem = BN.min(
+          position.storedAmount.sub(position.frozenAmount),
+          remainingAmount
+        );
+
+        const twoWayPegGuardianSetting = config.guardianSetting;
+
+        if (!twoWayPegGuardianSetting)
+          throw new Error("Two way peg guardian setting not found");
+
+        const receiverAta = getAssociatedTokenAddressSync(
+          new PublicKey(config.assetMint),
+          solanaPubkey,
+          true
+        );
+
+        if (process.env.NEXT_PUBLIC_DEVNET_REDEEM_ADDRESS) {
+          const transferIx = createUnstakeInstruction(
+            solanaPubkey,
+            new PublicKey(config.assetMint),
+            receiverAta,
+            amountToRedeem
+          );
+
+          ixs.push(transferIx);
+        }
+
+        remainingAmount = remainingAmount.sub(amountToRedeem);
+
+        if (remainingAmount.eq(new BN(0))) break;
+      }
+
+      const sig = await zplClient.signAndSendTransactionWithInstructions(ixs);
+
+      await mutateBalance();
+      await mutatePositions();
+      onClose();
+      notifyTx(true, {
+        chain: Chain.Solana,
+        txId: sig,
+        solanaNetwork,
+      });
+    } catch (error) {
+      if (error instanceof WalletSignTransactionError) {
+        notifyError("Sign transaction error");
+      } else {
+        notifyError("Error in unstaking, please try again");
+        captureException(error);
+        console.error("Error in unstaking", error);
+      }
+    } finally {
+      setIsUnstaking(false);
+    }
   };
 
   const handleRedeem = async () => {
@@ -163,7 +243,6 @@ export default function RedeemModal({
 
         // TODO: You can customize the retrieve address here
         if (process.env.NEXT_PUBLIC_DEVNET_REDEEM_ADDRESS) {
-
           const transferIx = createStakeInstruction(
             solanaPubkey,
             new PublicKey(config.assetMint),
@@ -235,10 +314,11 @@ export default function RedeemModal({
             invalid={!!errorMessage}
             invalidMessage={errorMessage}
             value={redeemAmount}
-            secondaryValue={`~$${Number(redeemAmount) > 0
-              ? formatValue(Number(redeemAmount) * btcPrice, 2)
-              : 0
-              }`}
+            secondaryValue={`~$${
+              Number(redeemAmount) > 0
+                ? formatValue(Number(redeemAmount) * btcPrice, 2)
+                : 0
+            }`}
             onActionClick={handleMax}
             handleValueChange={(e) => handleChange(e, BTC_DECIMALS)}
             showBalance={true}
@@ -298,10 +378,18 @@ export default function RedeemModal({
           <Button
             type="primary"
             size="large"
-            label="Redeem"
+            label="Stake"
             isLoading={isRedeeming}
             disabled={!!errorMessage || !redeemAmount}
             onClick={handleRedeem}
+          />
+          <Button
+            type="secondary"
+            size="large"
+            label="Unstake"
+            isLoading={isUnstaking}
+            disabled={!!errorMessage || !redeemAmount}
+            onClick={handleUnstake}
           />
         </ModalActions>
       </div>
