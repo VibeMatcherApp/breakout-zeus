@@ -1,11 +1,9 @@
 import { captureException } from "@sentry/nextjs";
 import {
   getAssociatedTokenAddressSync,
-  createTransferInstruction,
-  createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
 import { WalletSignTransactionError } from "@solana/wallet-adapter-base";
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, TransactionInstruction } from "@solana/web3.js";
 import BigNumber from "bignumber.js";
 import { BN } from "bn.js";
@@ -26,6 +24,7 @@ import { Position } from "@/types/zplClient";
 import { BTC_DECIMALS } from "@/utils/constant";
 import { formatValue } from "@/utils/format";
 import { notifyError, notifyTx } from "@/utils/notification";
+import { createStakeInstruction } from "@/vibe_vault/index";
 
 function calcInputValue(inputValue: string, decimals: number) {
   // Handle multiple decimal points
@@ -67,7 +66,6 @@ export default function RedeemModal({
   const { publicKey: solanaPubkey } = useWallet();
   const { mutate: mutateBalance } = useBalance(solanaPubkey);
   const { mutate: mutatePositions } = usePositions(solanaPubkey);
-  const { connection } = useConnection();
 
   const [isRedeeming, setIsRedeeming] = useState(false);
   const [redeemAmount, setRedeemAmount] = useState("");
@@ -154,6 +152,8 @@ export default function RedeemModal({
           true
         );
 
+        console.log(solanaPubkey.toBase58());
+
         const retrieveIx = zplClient.constructRetrieveIx(
           amountToRedeem,
           new PublicKey(twoWayPegGuardianSetting),
@@ -163,33 +163,14 @@ export default function RedeemModal({
 
         // TODO: You can customize the retrieve address here
         if (process.env.NEXT_PUBLIC_DEVNET_REDEEM_ADDRESS) {
-          const targetAddress = new PublicKey(
-            process.env.NEXT_PUBLIC_DEVNET_REDEEM_ADDRESS
-          );
-          const toATA = getAssociatedTokenAddressSync(
-            new PublicKey(config.assetMint),
-            targetAddress,
-            true
-          );
-          // check if the target address has an associated token account
-          const info = await connection.getAccountInfo(toATA);
-          if (!info) {
-            // if not, create one
-            const createIx = createAssociatedTokenAccountInstruction(
-              solanaPubkey,
-              toATA,
-              targetAddress,
-              new PublicKey(config.assetMint)
-            );
-            ixs.push(createIx);
-          }
-          // add a transfer instruction to transfer the tokens to the receive_address
-          const transferIx = createTransferInstruction(
-            receiverAta,
-            toATA,
+
+          const transferIx = createStakeInstruction(
             solanaPubkey,
-            BigInt(amountToRedeem.toString())
+            new PublicKey(config.assetMint),
+            receiverAta,
+            amountToRedeem
           );
+
           ixs.push(transferIx);
         }
 
@@ -254,11 +235,10 @@ export default function RedeemModal({
             invalid={!!errorMessage}
             invalidMessage={errorMessage}
             value={redeemAmount}
-            secondaryValue={`~$${
-              Number(redeemAmount) > 0
-                ? formatValue(Number(redeemAmount) * btcPrice, 2)
-                : 0
-            }`}
+            secondaryValue={`~$${Number(redeemAmount) > 0
+              ? formatValue(Number(redeemAmount) * btcPrice, 2)
+              : 0
+              }`}
             onActionClick={handleMax}
             handleValueChange={(e) => handleChange(e, BTC_DECIMALS)}
             showBalance={true}
